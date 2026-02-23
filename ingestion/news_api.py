@@ -2,8 +2,12 @@ import requests
 import pandas as pd
 import os
 from datetime import datetime
+from dotenv import load_dotenv
 
-API_KEY = os.getenv("newsAPI")
+load_dotenv()
+
+API_KEY = os.getenv("NEWS_API_KEY")
+
 URL = f"https://newsapi.org/v2/top-headlines?language=en&pageSize=100&apiKey={API_KEY}"
 
 def fetch_news():
@@ -28,7 +32,6 @@ def fetch_news():
     df.to_csv(filename, index=False)
 
     print("Saved:", filename)
-
 
 if __name__ == "__main__":
     fetch_news()

@@ -4,7 +4,9 @@ import pandas as pd
 RSS_FEEDS = [
     "http://feeds.bbci.co.uk/news/rss.xml",
     "http://rss.cnn.com/rss/edition.rss",
-    "https://feeds.reuters.com/reuters/topNews"
+    "https://feeds.reuters.com/reuters/topNews",
+    "https://www.aljazeera.com/xml/rss/all.xml",
+    "https://www.thehindu.com/news/feeder/default.rss",
 ]
 
 
@@ -36,6 +38,7 @@ def fetch_rss():
             articles.append({
                 "title": getattr(entry, "title", ""),
                 "content": extract_content(entry),
+                "url": getattr(entry, "link", ""),
                 "source": feed,
                 "platform": "rss"
             })

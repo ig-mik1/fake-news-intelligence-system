@@ -2,8 +2,8 @@ import feedparser
 import pandas as pd
 
 RSS_FEEDS = [
-    "http://feeds.bbci.co.uk/news/rss.xml",
-    "http://rss.cnn.com/rss/edition.rss",
+    "https://feeds.bbci.co.uk/news/rss.xml",
+    "https://rss.cnn.com/rss/edition.rss",
     "https://feeds.reuters.com/reuters/topNews",
     "https://www.aljazeera.com/xml/rss/all.xml",
     "https://www.thehindu.com/news/feeder/default.rss",

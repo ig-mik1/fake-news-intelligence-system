@@ -1,24 +1,61 @@
+import asyncio
+import hashlib
+import hmac
+import json
 import logging
 import os
+import time
+from pathlib import Path
 from datetime import datetime, timezone
-from threading import Lock
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List
+from threading import Lock
+from typing import Any, Dict, List, Optional
 
 import chromadb
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
-from api.schemas import VerifyRequest
+# Load .env before importing local modules that read FNIS_* at import time.
+load_dotenv()
+
+from api.schemas import FeedbackRequest, VerifyRequest
+from verification.evidence_engine import get_evidence_status, query_evidence
+from verification.hybrid_verifier import (
+    build_claim_text,
+    build_verification_response,
+    log_verification_event,
+)
 from verification.prediction_service import get_model_status, predict_fake_news
 
 LOGGER = logging.getLogger(__name__)
-_EVIDENCE_FN = None
-_EVIDENCE_INIT_ATTEMPTED = False
 _INGEST_LOCK = Lock()
+_VERIFY_LOCK = Lock()
+_FEEDBACK_LOCK = Lock()
+_VERIFY_RATE_STATE: Dict[str, List[float]] = {}
+_FEEDBACK_RATE_STATE: Dict[str, List[float]] = {}
+_FEEDBACK_RECENT_HASHES: Dict[str, float] = {}
 CHROMA_PATH = "./data/vector_storage"
 CHROMA_COLLECTION = "news_evidence"
+EVIDENCE_TIMEOUT_SECONDS = float(os.getenv("FNIS_EVIDENCE_TIMEOUT_SECONDS", "8"))
+FEEDBACK_PATH = Path(os.getenv("FNIS_FEEDBACK_PATH", "data/feedback/verification_feedback.jsonl"))
+VERIFY_RATE_LIMIT_PER_MINUTE = int(os.getenv("FNIS_VERIFY_RATE_LIMIT_PER_MINUTE", "30"))
+FEEDBACK_REQUIRE_API_KEY = os.getenv("FNIS_FEEDBACK_REQUIRE_API_KEY", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+FEEDBACK_API_KEY = os.getenv("FNIS_FEEDBACK_API_KEY", "").strip()
+FEEDBACK_RATE_LIMIT_PER_HOUR = int(os.getenv("FNIS_FEEDBACK_RATE_LIMIT_PER_HOUR", "20"))
+FEEDBACK_DUPLICATE_COOLDOWN_SECONDS = int(
+    os.getenv("FNIS_FEEDBACK_DUPLICATE_COOLDOWN_SECONDS", "21600")
+)
+TRUST_X_FORWARDED_FOR = os.getenv("FNIS_TRUST_X_FORWARDED_FOR", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 
 def scheduled_task():
@@ -35,26 +72,6 @@ def scheduled_task():
         LOGGER.exception("Background ingestion failed: %s", exc)
     finally:
         _INGEST_LOCK.release()
-
-
-def _get_evidence_fn():
-    global _EVIDENCE_FN
-    global _EVIDENCE_INIT_ATTEMPTED
-
-    if _EVIDENCE_INIT_ATTEMPTED:
-        return _EVIDENCE_FN
-    if _EVIDENCE_FN is not None:
-        return _EVIDENCE_FN
-    try:
-        from verification.evidence_engine import find_evidence
-    except Exception as exc:
-        LOGGER.exception("Failed to initialize evidence engine: %s", exc)
-        _EVIDENCE_INIT_ATTEMPTED = True
-        _EVIDENCE_FN = None
-        return None
-    _EVIDENCE_INIT_ATTEMPTED = True
-    _EVIDENCE_FN = find_evidence
-    return _EVIDENCE_FN
 
 
 def _get_chromadb_status():
@@ -131,6 +148,145 @@ def _get_cors_origins() -> List[str]:
     ]
 
 
+def _normalize_text(value: Optional[str]) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _feedback_signature(payload: FeedbackRequest) -> str:
+    base = "||".join(
+        [
+            _normalize_text(payload.headline),
+            _normalize_text(payload.content),
+            str(payload.human_label).upper(),
+        ]
+    )
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()
+
+
+def _get_client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "").strip()
+    if TRUST_X_FORWARDED_FOR and xff:
+        return xff.split(",")[0].strip() or "unknown"
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _check_verify_rate_limit(client_ip: str) -> None:
+    now_ts = time.time()
+    cutoff_window = now_ts - 60
+
+    with _VERIFY_LOCK:
+        # Prune old entries globally to prevent unbounded map growth.
+        stale_ips = []
+        for ip, events in _VERIFY_RATE_STATE.items():
+            fresh = [ts for ts in events if ts >= cutoff_window]
+            if fresh:
+                _VERIFY_RATE_STATE[ip] = fresh
+            else:
+                stale_ips.append(ip)
+        for ip in stale_ips:
+            _VERIFY_RATE_STATE.pop(ip, None)
+
+        ip_events = _VERIFY_RATE_STATE.get(client_ip, [])
+        if len(ip_events) >= VERIFY_RATE_LIMIT_PER_MINUTE:
+            retry_after = int(max(1, 60 - (now_ts - min(ip_events))))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Verify rate limit exceeded. Retry after {retry_after} seconds.",
+            )
+
+        ip_events.append(now_ts)
+        _VERIFY_RATE_STATE[client_ip] = ip_events
+
+
+def _enforce_feedback_api_key(x_feedback_key: Optional[str]) -> None:
+    if not FEEDBACK_REQUIRE_API_KEY:
+        return
+    if not FEEDBACK_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Feedback authentication is enabled but server key is missing.",
+        )
+    if not x_feedback_key or not hmac.compare_digest(x_feedback_key, FEEDBACK_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid feedback API key.")
+
+
+def _check_feedback_rate_and_dedup(payload: FeedbackRequest, client_ip: str) -> Dict[str, Any]:
+    now_ts = time.time()
+    signature = _feedback_signature(payload)
+    cutoff_window = now_ts - 3600
+    dedup_cutoff = now_ts - FEEDBACK_DUPLICATE_COOLDOWN_SECONDS
+
+    with _FEEDBACK_LOCK:
+        # Prune old per-IP entries globally to prevent unbounded map growth.
+        stale_ips = []
+        for ip, events in _FEEDBACK_RATE_STATE.items():
+            fresh = [ts for ts in events if ts >= cutoff_window]
+            if fresh:
+                _FEEDBACK_RATE_STATE[ip] = fresh
+            else:
+                stale_ips.append(ip)
+        for ip in stale_ips:
+            _FEEDBACK_RATE_STATE.pop(ip, None)
+
+        # Prune old per-IP entries.
+        ip_events = _FEEDBACK_RATE_STATE.get(client_ip, [])
+        if len(ip_events) >= FEEDBACK_RATE_LIMIT_PER_HOUR:
+            retry_after = int(max(1, 3600 - (now_ts - min(ip_events))))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Feedback rate limit exceeded. Retry after {retry_after} seconds.",
+            )
+
+        # Prune stale dedup signatures.
+        stale_keys = [key for key, ts in _FEEDBACK_RECENT_HASHES.items() if ts < dedup_cutoff]
+        for key in stale_keys:
+            _FEEDBACK_RECENT_HASHES.pop(key, None)
+
+        last_seen = _FEEDBACK_RECENT_HASHES.get(signature)
+        if last_seen is not None and (now_ts - last_seen) < FEEDBACK_DUPLICATE_COOLDOWN_SECONDS:
+            remaining = int(FEEDBACK_DUPLICATE_COOLDOWN_SECONDS - (now_ts - last_seen))
+            return {
+                "duplicate": True,
+                "duplicate_retry_after_seconds": max(1, remaining),
+                "signature": signature,
+            }
+
+        ip_events.append(now_ts)
+        _FEEDBACK_RATE_STATE[client_ip] = ip_events
+        _FEEDBACK_RECENT_HASHES[signature] = now_ts
+
+    return {"duplicate": False, "signature": signature}
+
+
+def _append_feedback_event_secure(
+    payload: FeedbackRequest,
+    client_ip: str,
+    user_agent: str,
+    feedback_signature: str,
+) -> str:
+    FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "headline": payload.headline,
+        "content": payload.content,
+        "model_decision": payload.model_decision,
+        "human_label": payload.human_label,
+        "notes": payload.notes,
+        "review_status": "pending",
+        "approved_for_training": False,
+        "feedback_signature": feedback_signature,
+        "client_ip_hash": hashlib.sha1(client_ip.encode("utf-8")).hexdigest(),
+        "user_agent": (user_agent or "")[:300],
+    }
+    line = json.dumps(event, ensure_ascii=True)
+    with _FEEDBACK_LOCK:
+        with FEEDBACK_PATH.open("a", encoding="utf-8") as file:
+            file.write(line + "\n")
+    return str(FEEDBACK_PATH)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
@@ -151,62 +307,112 @@ app.add_middleware(
 
 
 @app.post("/api/verify")
-async def verify_news(payload: VerifyRequest):
+async def verify_news(
+    payload: VerifyRequest,
+    request: Request,
+):
+    _check_verify_rate_limit(_get_client_ip(request))
+
     headline = payload.headline
     content = payload.content
+    claim_text = build_claim_text(headline, content)
+
+    ml_future = asyncio.create_task(
+        asyncio.to_thread(predict_fake_news, headline, content)
+    )
+    evidence_future = asyncio.create_task(
+        asyncio.to_thread(query_evidence, claim_text, 5)
+    )
 
     try:
-        ml_result = predict_fake_news(headline, content=content)
+        ml_result = await ml_future
     except ValueError as exc:
+        evidence_future.cancel()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
+        evidence_future.cancel()
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        evidence_future.cancel()
         raise HTTPException(status_code=500, detail="Prediction failed.") from exc
 
-    evidence_fn = _get_evidence_fn()
-    evidence = []
-    warnings = []
-    evidence_available = evidence_fn is not None
-    if evidence_fn:
-        try:
-            evidence = evidence_fn(headline) or []
-        except Exception as exc:
-            LOGGER.exception("Evidence lookup failed: %s", exc)
-            warnings.append("Evidence service unavailable. Returned ML-only prediction.")
-            evidence_available = False
-            evidence = []
-    else:
-        warnings.append("Evidence service unavailable. Returned ML-only prediction.")
-        evidence_available = False
+    evidence_articles = []
+    evidence_error = None
+    try:
+        evidence_articles = await asyncio.wait_for(
+            evidence_future,
+            timeout=EVIDENCE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        evidence_future.cancel()
+        evidence_error = "Evidence lookup timed out."
+        LOGGER.warning("Evidence lookup timed out after %s seconds.", EVIDENCE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        evidence_error = str(exc)
+        LOGGER.warning("Evidence lookup failed: %s", exc)
 
-    if len(evidence) > 0:
-        evidence_weight = 1.2
-    elif evidence_available:
-        evidence_weight = 0.8
-    else:
-        evidence_weight = 1.0
-    final_score = min(ml_result["confidence"] * evidence_weight, 100.0)
+    result = build_verification_response(
+        headline=headline,
+        content=content,
+        ml_result=ml_result,
+        evidence_articles=evidence_articles,
+        evidence_error=evidence_error,
+    )
+    log_verification_event(result)
+    return result
 
-    return {
-        "headline": headline,
-        "trust_score": f"{final_score:.2f}%",
-        "ml_confidence": f"{ml_result['confidence']}%",
-        "prediction": ml_result["label"],
-        "supporting_evidence": evidence,
-        "warnings": warnings,
-    }
+
+@app.post("/api/feedback")
+async def submit_feedback(
+    payload: FeedbackRequest,
+    request: Request,
+    x_feedback_key: Optional[str] = Header(default=None, alias="X-Feedback-Key"),
+):
+    try:
+        _enforce_feedback_api_key(x_feedback_key)
+        client_ip = _get_client_ip(request)
+        guard_result = _check_feedback_rate_and_dedup(payload, client_ip=client_ip)
+        if guard_result["duplicate"]:
+            return {
+                "status": "ignored",
+                "message": "Duplicate feedback ignored for cooldown window.",
+                "retry_after_seconds": guard_result["duplicate_retry_after_seconds"],
+            }
+
+        path = _append_feedback_event_secure(
+            payload=payload,
+            client_ip=client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            feedback_signature=guard_result["signature"],
+        )
+        return {
+            "status": "ok",
+            "message": "Feedback recorded for retraining.",
+            "storage_path": path,
+            "review_status": "pending",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.exception("Failed to store feedback event: %s", exc)
+        raise HTTPException(status_code=500, detail="Unable to store feedback.") from exc
 
 
 @app.get("/healthz")
 async def healthz():
     model_status = get_model_status()
     chromadb_status = _get_chromadb_status()
-    ready = bool(model_status.get("loaded")) and bool(chromadb_status.get("ready"))
+    evidence_status = get_evidence_status()
+    ready = (
+        bool(model_status.get("loaded"))
+        and bool(chromadb_status.get("ready"))
+        and bool(evidence_status.get("ready"))
+    )
     return {
         "status": "ok" if ready else "degraded",
         "model": model_status,
         "chromadb": chromadb_status,
+        "evidence": evidence_status,
     }
 
 

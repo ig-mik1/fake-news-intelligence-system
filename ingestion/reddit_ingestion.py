@@ -5,7 +5,8 @@ def fetch_reddit_evidence(query, limit=10):
     url = f"https://api.pullpush.io/reddit/search/submission/?q={query}&size={limit}"
     
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
         data = response.json()
         
         results = []

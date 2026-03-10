@@ -64,6 +64,47 @@ def _normalize_label(label: str) -> str:
     return upper
 
 
+def _resolve_label_index(model, target: str) -> Optional[int]:
+    id2label = getattr(model.config, "id2label", {}) or {}
+    target_upper = target.upper()
+    for idx, raw_name in id2label.items():
+        name = str(raw_name).upper()
+        if name == target_upper:
+            return int(idx)
+        if target_upper == "FAKE" and "FAKE" in name:
+            return int(idx)
+        if target_upper == "REAL" and ("REAL" in name or "TRUE" in name):
+            return int(idx)
+    return None
+
+
+def _extract_binary_probabilities(model, probs_tensor) -> Tuple[float, float]:
+    probs = [float(x) for x in probs_tensor[0].tolist()]
+    fake_idx = _resolve_label_index(model, "FAKE")
+    real_idx = _resolve_label_index(model, "REAL")
+
+    if fake_idx is None and len(probs) > 1:
+        fake_idx = 1
+    if real_idx is None and len(probs) > 0:
+        real_idx = 0
+
+    fake_prob = probs[fake_idx] if fake_idx is not None and fake_idx < len(probs) else 0.0
+    real_prob = probs[real_idx] if real_idx is not None and real_idx < len(probs) else 0.0
+
+    total = fake_prob + real_prob
+    if total > 0:
+        fake_prob /= total
+        real_prob /= total
+    elif len(probs) >= 2:
+        fake_prob = probs[1]
+        real_prob = probs[0]
+    else:
+        fake_prob = 0.5
+        real_prob = 0.5
+
+    return real_prob, fake_prob
+
+
 def _validate_text(text: Any) -> str:
     if not isinstance(text, str):
         raise ValueError("Input text must be a string.")
@@ -114,15 +155,15 @@ def predict_fake_news(text: str, content: Optional[str] = None) -> Dict[str, Any
         outputs = model(**inputs)
 
     probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
-    confidence, label_idx = torch.max(probs, dim=1)
-    idx = int(label_idx.item())
-
-    id2label = getattr(model.config, "id2label", {}) or {}
-    raw_label = id2label.get(idx, "FAKE" if idx == 1 else "REAL")
+    real_prob, fake_prob = _extract_binary_probabilities(model, probs)
+    predicted_label = "FAKE" if fake_prob >= real_prob else "REAL"
+    predicted_confidence = fake_prob if predicted_label == "FAKE" else real_prob
 
     return {
-        "label": _normalize_label(raw_label),
-        "confidence": round(float(confidence.item()) * 100, 2),
+        "label": predicted_label,
+        "confidence": round(float(predicted_confidence) * 100, 2),
+        "ml_fake_probability": round(float(fake_prob), 6),
+        "ml_real_probability": round(float(real_prob), 6),
         "raw_scores": [float(x) for x in probs[0].tolist()],
         "uses_content": bool(cleaned_content),
         "device": str(device),

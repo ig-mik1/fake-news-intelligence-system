@@ -1,5 +1,6 @@
 "use client";
 
+import type { ValueType, NameType } from "recharts/types/component/DefaultTooltipContent";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, ShieldCheck, Sigma } from "lucide-react";
 import {
@@ -56,7 +57,7 @@ export default function DashboardPage() {
     const real = summary?.real_count ?? 0;
     const unknown = summary?.unknown_count ?? 0;
     const classified = fake + real;
-    const trustRate = pct(real, classified || fake + real + unknown);
+    const trustRate = pct(real, classified);
     return { fake, real, unknown, classified, trustRate };
   }, [summary]);
 
@@ -75,8 +76,9 @@ export default function DashboardPage() {
     if (!entries.length) return [];
 
     const maxCount = Math.max(...entries.map(([, count]) => count), 1);
-    const fakeRate = pct(totals.fake, Math.max(totals.classified, 1));
-    const unknownRate = pct(totals.unknown, Math.max(summary.total_articles, 1));
+    const totalArticles = Math.max(summary.total_articles, 1);
+    const fakeRate = pct(totals.fake, totalArticles);
+    const unknownRate = pct(totals.unknown, totalArticles);
 
     return entries
       .map(([source, count]) => {
@@ -139,14 +141,20 @@ export default function DashboardPage() {
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="sourceLabel" interval={0} />
                       <YAxis domain={[0, 100]} />
-                      <Tooltip
-                        labelFormatter={(_, payload) => {
-                          const row = payload?.[0]?.payload as { source?: string; sourceLabel?: string } | undefined;
-                          if (!row) return "";
-                          return `${row.sourceLabel}: ${row.source}`;
-                        }}
-                        formatter={(value: string | number) => [`${value}`, "Risk Score"]}
-                      />
+                    <Tooltip
+                      labelFormatter={(_, payload) => {
+                        const row = payload?.[0]?.payload as
+                          | { source?: string; sourceLabel?: string }
+                          | undefined;
+
+                        if (!row) return "";
+                        return `${row.sourceLabel}: ${row.source}`;
+                      }}
+                      formatter={(value?: ValueType, name?: NameType) => [
+                        `${value ?? 0}%`,
+                        String(name ?? ""),
+                      ]}
+                    />
                       <Bar dataKey="risk" radius={[8, 8, 0, 0]}>
                         {heatmapData.map((entry) => (
                           <Cell key={`${entry.source}-${entry.sourceLabel}`} fill={toRiskColor(entry.risk)} />

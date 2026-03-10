@@ -85,7 +85,11 @@ export default function DashboardPage() {
         return { source, risk: score, volume: count };
       })
       .sort((a, b) => b.risk - a.risk)
-      .slice(0, 10);
+      .slice(0, 10)
+      .map((item, index) => ({
+        ...item,
+        sourceLabel: `SRC-${index + 1}`,
+      }));
   }, [summary, totals]);
 
   return (
@@ -95,11 +99,6 @@ export default function DashboardPage() {
           <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Big Data Dashboard</h1>
           <p className="mt-1 text-sm text-slate-500">Multi-weighted intelligence metrics from ChromaDB and model outputs.</p>
         </div>
-        {summary?.estimated_from_sample ? (
-          <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-            Estimated from sample
-          </span>
-        ) : null}
       </div>
 
       {loading ? <p className="text-sm text-slate-500">Loading metrics...</p> : null}
@@ -138,12 +137,19 @@ export default function DashboardPage() {
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={heatmapData}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="source" interval={0} angle={-18} textAnchor="end" height={64} />
+                      <XAxis dataKey="sourceLabel" interval={0} />
                       <YAxis domain={[0, 100]} />
-                      <Tooltip formatter={(value: string | number) => [`${value}`, "Risk Score"]} />
+                      <Tooltip
+                        labelFormatter={(_, payload) => {
+                          const row = payload?.[0]?.payload as { source?: string; sourceLabel?: string } | undefined;
+                          if (!row) return "";
+                          return `${row.sourceLabel}: ${row.source}`;
+                        }}
+                        formatter={(value: string | number) => [`${value}`, "Risk Score"]}
+                      />
                       <Bar dataKey="risk" radius={[8, 8, 0, 0]}>
                         {heatmapData.map((entry) => (
-                          <Cell key={entry.source} fill={toRiskColor(entry.risk)} />
+                          <Cell key={`${entry.source}-${entry.sourceLabel}`} fill={toRiskColor(entry.risk)} />
                         ))}
                       </Bar>
                     </BarChart>

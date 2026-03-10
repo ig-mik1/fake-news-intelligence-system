@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Loader2, ShieldAlert, ShieldCheck, Sparkles } from "lucide-react";
 
-import { postVerification, type VerifyResponse } from "@/lib/api";
+import { postFeedback, postVerification, type VerifyResponse } from "@/lib/api";
 
 const SOURCE_PRIORITY: Record<string, number> = {
   newsdata: 92,
@@ -16,9 +16,10 @@ const SOURCE_PRIORITY: Record<string, number> = {
   unknown: 50,
 };
 
-function parsePercent(value: string): number {
+function parsePercent(value: string | number): number {
   const parsed = Number(String(value).replace("%", "").trim());
-  return Number.isFinite(parsed) ? parsed : 0;
+  if (!Number.isFinite(parsed)) return 0;
+  return parsed <= 1 ? parsed * 100 : parsed;
 }
 
 function normalizeSource(raw: string): string {
@@ -49,10 +50,14 @@ function computeConsensusScore(result: VerifyResponse | null): number {
 
 export default function VerifyPage() {
   const [headline, setHeadline] = useState("");
+  const [content, setContent] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [serviceOffline, setServiceOffline] = useState(false);
   const [result, setResult] = useState<VerifyResponse | null>(null);
+  const [feedbackLoading, setFeedbackLoading] = useState<"REAL" | "FAKE" | null>(null);
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
   const trustScore = useMemo(() => parsePercent(result?.trust_score ?? "0"), [result]);
   const mlConfidence = useMemo(() => parsePercent(result?.ml_confidence ?? "0"), [result]);
@@ -70,7 +75,13 @@ export default function VerifyPage() {
       setLoading(true);
       setError(null);
       setServiceOffline(false);
-      const data = await postVerification({ headline: cleaned });
+      setFeedbackMessage(null);
+      setFeedbackError(null);
+      const cleanedContent = content.trim();
+      const data = await postVerification({
+        headline: cleaned,
+        content: cleanedContent ? cleanedContent : undefined,
+      });
       setResult(data);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Verification failed.";
@@ -79,6 +90,37 @@ export default function VerifyPage() {
       setError(offline ? "Service Offline: Backend is unreachable right now." : message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFeedback = async (humanLabel: "REAL" | "FAKE") => {
+    if (!result) return;
+    try {
+      setFeedbackLoading(humanLabel);
+      setFeedbackError(null);
+      setFeedbackMessage(null);
+
+      const feedback = await postFeedback({
+        headline: result.headline || headline.trim(),
+        content: content.trim() || undefined,
+        model_decision: result.prediction === "FAKE" ? "FAKE" : "REAL",
+        human_label: humanLabel,
+      });
+
+      if (feedback.status === "ignored") {
+        setFeedbackMessage(
+          feedback.retry_after_seconds
+            ? `Duplicate ignored. Try again in ~${feedback.retry_after_seconds}s.`
+            : feedback.message
+        );
+      } else {
+        setFeedbackMessage("Thanks. Feedback captured and queued for review.");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to submit feedback.";
+      setFeedbackError(message);
+    } finally {
+      setFeedbackLoading(null);
     }
   };
 
@@ -109,6 +151,13 @@ export default function VerifyPage() {
             onChange={(e) => setHeadline(e.target.value)}
             placeholder="Paste a headline (10-500 chars) to verify..."
             className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-300 focus:ring-2 focus:ring-slate-200"
+          />
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="Optional: paste article content/body for better reliability..."
+            rows={6}
+            className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-300 focus:ring-2 focus:ring-slate-200"
           />
 
           <button
@@ -168,6 +217,34 @@ export default function VerifyPage() {
                 ))}
               </div>
             ) : null}
+
+            <div className="mt-5 border-t border-slate-200 pt-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Help Improve Model (Human Feedback)
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleFeedback("REAL")}
+                  disabled={feedbackLoading !== null}
+                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {feedbackLoading === "REAL" ? <Loader2 size={14} className="animate-spin" /> : null}
+                  Mark as REAL
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleFeedback("FAKE")}
+                  disabled={feedbackLoading !== null}
+                  className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {feedbackLoading === "FAKE" ? <Loader2 size={14} className="animate-spin" /> : null}
+                  Mark as FAKE
+                </button>
+              </div>
+              {feedbackMessage ? <p className="mt-2 text-xs text-slate-600">{feedbackMessage}</p> : null}
+              {feedbackError ? <p className="mt-2 text-xs text-red-600">{feedbackError}</p> : null}
+            </div>
           </div>
 
           <div className="rounded-3xl border border-white/40 bg-white/60 p-6 shadow-lg backdrop-blur-xl">

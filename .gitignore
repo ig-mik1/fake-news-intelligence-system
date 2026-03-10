@@ -7,6 +7,13 @@ data/
 
 # models
 models/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+*.pkl
+*.onnx
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

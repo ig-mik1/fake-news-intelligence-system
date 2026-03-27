@@ -217,6 +217,12 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Project report
+FNIS_Paper.tex
+
+# Runtime logs
+logs/*.jsonl
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

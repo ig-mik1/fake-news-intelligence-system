@@ -13,6 +13,13 @@ CHROMA_COLLECTION = os.getenv("FNIS_CHROMA_COLLECTION", "news_evidence")
 EMBEDDING_MODEL = os.getenv("FNIS_EMBED_MODEL", "all-MiniLM-L6-v2")
 EMBED_CACHE_SIZE = int(os.getenv("FNIS_EMBED_CACHE_SIZE", "2048"))
 FALLBACK_SCAN_LIMIT = int(os.getenv("FNIS_EVIDENCE_FALLBACK_SCAN_LIMIT", "2000"))
+MIN_SEMANTIC_SIMILARITY = float(os.getenv("FNIS_MIN_SEMANTIC_SIMILARITY", "0.32"))
+MIN_LEXICAL_SIMILARITY = float(os.getenv("FNIS_MIN_LEXICAL_SIMILARITY", "0.02"))
+MIN_COMBINED_RELEVANCE = float(os.getenv("FNIS_MIN_COMBINED_RELEVANCE", "0.24"))
+MIN_SIGNIFICANT_TERM_OVERLAP = int(os.getenv("FNIS_MIN_SIGNIFICANT_TERM_OVERLAP", "2"))
+STRONG_LEXICAL_SIMILARITY = float(os.getenv("FNIS_STRONG_LEXICAL_SIMILARITY", "0.12"))
+MIN_QUERY_TERM_COVERAGE = float(os.getenv("FNIS_MIN_QUERY_TERM_COVERAGE", "0.28"))
+VERY_STRONG_LEXICAL_SIMILARITY = float(os.getenv("FNIS_VERY_STRONG_LEXICAL_SIMILARITY", "0.22"))
 MIN_TOKEN_LEN = 3
 STOPWORDS = {
     "the",
@@ -169,6 +176,11 @@ def _to_snippet(text: str, max_len: int = 280) -> str:
 def _claim_terms(text: str) -> set:
     words = re.findall(r"[a-zA-Z][a-zA-Z0-9]{2,}", str(text or "").lower())
     return {word for word in words if len(word) >= MIN_TOKEN_LEN and word not in STOPWORDS}
+
+
+def _significant_query_terms(text: str) -> set:
+    terms = _claim_terms(text)
+    return {term for term in terms if len(term) >= 5}
 
 
 def _lexical_similarity(query_text: str, doc_text: str) -> float:
@@ -329,13 +341,59 @@ def query_evidence(query_text: str, top_k: int = 5) -> List[Dict[str, Any]]:
     else:
         evidence = _query_evidence_lexical(collection, normalized_query, top_k * 2)
 
-    # Rerank based on combined similarity and source credibility
+    # Rerank and filter for precision. It is better to return no evidence than unrelated evidence.
+    significant_terms = _significant_query_terms(normalized_query)
+    filtered: List[Dict[str, Any]] = []
     for item in evidence:
+        combined_text = f"{item.get('title', '')} {item.get('snippet', '')}".strip()
+        lexical_similarity = _lexical_similarity(normalized_query, combined_text)
+        overlap_terms = significant_terms & _claim_terms(combined_text)
+        query_term_coverage = len(overlap_terms) / max(1, len(significant_terms))
         source_score = _score_source_simple(item["source"], item["url"])
-        item["combined_score"] = item["similarity_score"] * 0.7 + source_score * 0.3
+        semantic_similarity = float(item.get("similarity_score", 0.0))
+        combined_score = semantic_similarity * 0.55 + lexical_similarity * 0.35 + source_score * 0.10
+        required_overlap = 1 if len(significant_terms) <= 4 else MIN_SIGNIFICANT_TERM_OVERLAP
 
-    evidence.sort(key=lambda x: x["combined_score"], reverse=True)
-    return evidence[:top_k]
+        item["lexical_similarity"] = round(float(lexical_similarity), 4)
+        item["significant_term_overlap"] = sorted(overlap_terms)
+        item["query_term_coverage"] = round(float(query_term_coverage), 4)
+        item["combined_score"] = round(float(combined_score), 4)
+
+        if semantic_similarity < MIN_SEMANTIC_SIMILARITY:
+            continue
+        if lexical_similarity < MIN_LEXICAL_SIMILARITY and not overlap_terms:
+            continue
+        if len(overlap_terms) < required_overlap and lexical_similarity < STRONG_LEXICAL_SIMILARITY:
+            continue
+        if (
+            len(significant_terms) >= 5
+            and query_term_coverage < MIN_QUERY_TERM_COVERAGE
+            and lexical_similarity < VERY_STRONG_LEXICAL_SIMILARITY
+        ):
+            continue
+        if combined_score < MIN_COMBINED_RELEVANCE:
+            continue
+
+        item["relevance"] = round(float(combined_score) * 100, 2)
+        filtered.append(item)
+
+    filtered.sort(
+        key=lambda row: (
+            row["combined_score"],
+            row["lexical_similarity"],
+            row["similarity_score"],
+        ),
+        reverse=True,
+    )
+    return filtered[:top_k]
+
+
+def warm_evidence_engine() -> Dict[str, Any]:
+    _init_artifacts()
+    status = get_evidence_status()
+    if _EMBEDDING_AVAILABLE:
+        _embed_query_cached(_normalize_query("fake news verification warmup"))
+    return status
 
 
 def get_evidence_status() -> Dict[str, Any]:

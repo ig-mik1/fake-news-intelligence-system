@@ -1,0 +1,15 @@
+# Ignore huge data and model folders (mapped via volumes instead)
+data/
+models/final_model/
+logs/
+
+# Ignore development noise
+__pycache__/
+*.pyc
+.git
+.env
+
+# Ignore frontend build artifacts
+frontend/node_modules/
+frontend/.next/
+frontend/out/

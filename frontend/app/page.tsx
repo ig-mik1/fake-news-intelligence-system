@@ -1,42 +1,94 @@
 // frontend/app/page.tsx
 "use client";
+
 import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
+import { Activity, ArrowRight, ShieldCheck, Waves } from "lucide-react";
+
+import { Badge, Button, DashboardCard, MetricCard, PageShell } from "@/components/ui";
 
 export default function Home() {
   const router = useRouter();
 
   return (
-    <div className="relative min-h-[90vh] flex flex-col items-center justify-center">
-      <motion.div 
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="text-center z-10 px-6"
-      >
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-blue-100 bg-blue-50/50 text-blue-700 text-xs font-semibold mb-8">
-          <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
-          AI News Intelligence Platform
-        </div>
+    <PageShell className="pb-16">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.9fr)]">
+        <motion.section initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}>
+          <DashboardCard className="p-8 md:p-10" hover>
+            <Badge className="border-sky-200 bg-sky-50/90 text-sky-700 supports-[backdrop-filter]:bg-sky-50/70">
+              <span className="h-2 w-2 rounded-full bg-sky-500 animate-pulse" />
+              AI news intelligence platform
+            </Badge>
 
-        <h1 className="text-7xl font-extrabold tracking-tight text-slate-900 mb-6 leading-[1.1]">
-          Verify News with <br />
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-500">
-            Absolute Confidence
-          </span>
-        </h1>
+            <div className="mt-8 max-w-2xl space-y-4">
+              <h1 className="text-3xl font-semibold tracking-tight text-slate-900">
+                A cleaner verification workspace for trust scoring, evidence review, and live monitoring.
+              </h1>
+              <p className="text-sm text-slate-600">
+                Review suspicious headlines, inspect corroborating sources, and monitor ingestion activity from one
+                consistent analytics dashboard.
+              </p>
+            </div>
 
-        <p className="text-slate-500 text-lg max-w-2xl mx-auto mb-12 font-medium">
-          Our AI News Intelligence platform uses cross-consensus checking and trust scoring 
-          to identify misinformation in real-time.
-        </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Button onClick={() => router.push("/verify")}>
+                Start Verification
+                <ArrowRight size={16} />
+              </Button>
+              <Button variant="secondary" onClick={() => router.push("/dashboard")}>
+                Open Dashboard
+              </Button>
+            </div>
 
-        <button 
-          onClick={() => router.push("/verify")}
-          className="bg-[#0f172a] text-white px-10 py-4 rounded-xl font-bold text-lg hover:bg-black transition-all shadow-2xl shadow-blue-900/20 active:scale-95"
+            <div className="mt-10 grid gap-4 md:grid-cols-3">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-medium text-slate-900">Cross-check faster</p>
+                <p className="mt-2 text-sm text-slate-600">
+                  Pull ML confidence, source quality, and evidence consensus into one decision flow.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-medium text-slate-900">Read the signal</p>
+                <p className="mt-2 text-sm text-slate-600">
+                  Use muted charts and structured metrics to spot misinformation patterns quickly.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-medium text-slate-900">Stay operational</p>
+                <p className="mt-2 text-sm text-slate-600">
+                  Monitor ingestion freshness and source activity without leaving the app shell.
+                </p>
+              </div>
+            </div>
+          </DashboardCard>
+        </motion.section>
+
+        <motion.aside
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.08 }}
+          className="grid gap-4"
         >
-          Start Verification
-        </button>
-      </motion.div>
-    </div>
+          <MetricCard
+            title="Verification workflow"
+            value="3-step"
+            subtitle="Analyze headline, inspect evidence, collect human feedback"
+            icon={ShieldCheck}
+          />
+          <MetricCard
+            title="Monitoring cadence"
+            value="30s"
+            subtitle="Live stream refresh interval across source ingestion"
+            icon={Activity}
+          />
+          <MetricCard
+            title="Dashboard posture"
+            value="Clean"
+            subtitle="Unified cards, readable charts, and softer visual hierarchy"
+            icon={Waves}
+          />
+        </motion.aside>
+      </div>
+    </PageShell>
   );
 }

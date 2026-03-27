@@ -300,9 +300,6 @@ def build_verification_response(
     )
     source_score = compute_source_score(evidence_articles)
     claim_risk = _claim_risk_score(claim_text)
-    # Source credibility should matter only when retrieved evidence is relevant.
-    source_alignment = _clamp01(evidence_score * 1.25)
-    source_score_effective = 0.5 + (source_score - 0.5) * source_alignment
 
     warnings: List[str] = []
     verification_mode = "hybrid"
@@ -317,6 +314,13 @@ def build_verification_response(
     elif not evidence_articles:
         warnings.append("No supporting evidence retrieved. Trust score is less certain.")
         system_confidence = "medium"
+        # Lack of corroboration should be mildly negative, not neutral.
+        evidence_score = 0.35
+        source_score = 0.5
+
+    # Source credibility should matter only when retrieved evidence is relevant.
+    source_alignment = _clamp01(evidence_score * 1.25)
+    source_score_effective = 0.5 + (source_score - 0.5) * source_alignment
 
     trust_score = (
         WEIGHT_ML * (1.0 - ml_fake_probability)

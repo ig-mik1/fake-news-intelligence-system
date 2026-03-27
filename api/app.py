@@ -22,6 +22,7 @@ load_dotenv()
 
 from api.schemas import FeedbackRequest, VerifyRequest
 from verification.evidence_engine import get_evidence_status, query_evidence
+from verification.evidence_engine import warm_evidence_engine
 from verification.hybrid_verifier import (
     build_claim_text,
     build_verification_response,
@@ -38,7 +39,7 @@ _FEEDBACK_RATE_STATE: Dict[str, List[float]] = {}
 _FEEDBACK_RECENT_HASHES: Dict[str, float] = {}
 CHROMA_PATH = "./data/vector_storage"
 CHROMA_COLLECTION = "news_evidence"
-EVIDENCE_TIMEOUT_SECONDS = float(os.getenv("FNIS_EVIDENCE_TIMEOUT_SECONDS", "8"))
+EVIDENCE_TIMEOUT_SECONDS = float(os.getenv("FNIS_EVIDENCE_TIMEOUT_SECONDS", "15"))
 FEEDBACK_PATH = Path(os.getenv("FNIS_FEEDBACK_PATH", "data/feedback/verification_feedback.jsonl"))
 VERIFY_RATE_LIMIT_PER_MINUTE = int(os.getenv("FNIS_VERIFY_RATE_LIMIT_PER_MINUTE", "30"))
 FEEDBACK_REQUIRE_API_KEY = os.getenv("FNIS_FEEDBACK_REQUIRE_API_KEY", "false").strip().lower() in {
@@ -289,10 +290,25 @@ def _append_feedback_event_secure(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    startup_ingestion_task = None
+    try:
+        model_status, evidence_status = await asyncio.gather(
+            asyncio.to_thread(get_model_status),
+            asyncio.to_thread(warm_evidence_engine),
+        )
+        LOGGER.info("Startup warmup complete. model_loaded=%s evidence_ready=%s", model_status.get("loaded"), evidence_status.get("ready"))
+    except Exception as exc:
+        LOGGER.warning("Startup warmup did not complete cleanly: %s", exc)
+
+    LOGGER.info("Triggering startup ingestion run.")
+    startup_ingestion_task = asyncio.create_task(asyncio.to_thread(scheduled_task))
+
     scheduler = BackgroundScheduler()
     scheduler.add_job(scheduled_task, "interval", hours=1)
     scheduler.start()
     yield
+    if startup_ingestion_task and not startup_ingestion_task.done():
+        startup_ingestion_task.cancel()
     scheduler.shutdown()
 
 

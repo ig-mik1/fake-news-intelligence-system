@@ -2,9 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Clock3, Newspaper, Radio, RefreshCcw } from "lucide-react";
+import { Clock3, Newspaper, Radio, RefreshCcw, SearchX } from "lucide-react";
 
 import CommandCard from "@/components/command-card";
+import {
+  Badge,
+  DashboardCard,
+  EmptyState,
+  ListItemSkeleton,
+  MetricCardSkeleton,
+  Notice,
+  PageShell,
+  SectionHeader,
+} from "@/components/ui";
 import { getMonitoringLatest, type MonitoringItem, type MonitoringLatestResponse } from "@/lib/api";
 
 const REFRESH_MS = 30000;
@@ -65,28 +75,49 @@ export default function MonitoringPage() {
   }, []);
 
   return (
-    <div className="max-w-6xl mx-auto py-12 px-6">
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-3xl font-bold text-slate-900">Live Monitoring Stream</h1>
-        <div className="inline-flex items-center gap-2 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-bold">
-          <span className="w-2 h-2 rounded-full bg-green-600 animate-pulse" />
-          REAL-TIME
+    <PageShell>
+      <SectionHeader
+        title="Live Monitoring Stream"
+        description="Track the freshest ingested records, active sources, and sync cadence in a consistent analyst feed."
+        action={
+          <Badge className="border-green-200 bg-green-50 text-green-600 supports-[backdrop-filter]:bg-green-50/80">
+            <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+            Real-time
+          </Badge>
+        }
+      />
+
+      {loading ? (
+        <>
+          <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <MetricCardSkeleton key={index} />
+            ))}
+          </div>
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <ListItemSkeleton key={index} />
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <CommandCard title="Streamed Items" value={`${items.length}`} subtitle="Loaded from /api/monitoring/latest" icon={Newspaper} />
+          <CommandCard title="Active Sources" value={`${activeSources}`} subtitle="Reported by backend stream" icon={Radio} />
+          <CommandCard title="Last Sync" value={lastSync} subtitle={`Auto-refresh every ${REFRESH_MS / 1000}s`} icon={RefreshCcw} />
         </div>
-      </div>
+      )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
-        <CommandCard title="Streamed Items" value={`${items.length}`} subtitle="Loaded from /api/monitoring/latest" icon={Newspaper} />
-        <CommandCard title="Active Sources" value={`${activeSources}`} subtitle="Reported by backend stream" icon={Radio} />
-        <CommandCard title="Last Sync" value={lastSync} subtitle={`Auto-refresh every ${REFRESH_MS / 1000}s`} icon={RefreshCcw} />
-      </div>
-
-      {loading ? <p className="text-slate-500">Loading latest stream...</p> : null}
-      {error ? <p className="text-red-600 mb-4">{error}</p> : null}
+      {error ? <Notice tone="danger" className="mb-4">{error}</Notice> : null}
 
       {!loading && !error ? (
         <div className="space-y-3">
           {items.length === 0 ? (
-            <p className="text-slate-500">No items found in vector storage yet.</p>
+            <EmptyState
+              icon={SearchX}
+              title="No data available yet"
+              description="The monitoring stream will populate once new items are ingested into vector storage."
+            />
           ) : null}
 
           {items.map((item, index) => (
@@ -95,30 +126,36 @@ export default function MonitoringPage() {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.02 }}
-              className="bg-white border border-slate-100 rounded-xl p-4 shadow-sm"
             >
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <div>
-                  <h3 className="text-sm md:text-base font-semibold text-slate-900">{item.title}</h3>
-                  <p className="text-xs text-slate-500 mt-1 uppercase tracking-wide">
-                    Source: {item.source} | Platform: {item.platform}
-                  </p>
-                  {item.url ? (
-                    <a className="text-xs text-blue-600 hover:underline break-all" href={item.url} target="_blank" rel="noreferrer">
-                      {item.url}
-                    </a>
-                  ) : null}
+              <DashboardCard hover className="p-5">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="space-y-2">
+                    <h2 className="text-sm font-medium text-slate-900 md:text-base">{item.title}</h2>
+                    <p className="text-xs text-slate-500">
+                      Source: {item.source} | Platform: {item.platform}
+                    </p>
+                    {item.url ? (
+                      <a
+                        className="block break-all text-sm text-slate-600 transition hover:text-slate-900 hover:underline"
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {item.url}
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="inline-flex items-center gap-2 text-xs text-slate-500">
+                    <Clock3 size={14} />
+                    {formatTime(item.ingested_at)}
+                  </div>
                 </div>
-                <div className="inline-flex items-center gap-2 text-xs text-slate-500">
-                  <Clock3 size={14} />
-                  {formatTime(item.ingested_at)}
-                </div>
-              </div>
+              </DashboardCard>
             </motion.div>
           ))}
         </div>
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 

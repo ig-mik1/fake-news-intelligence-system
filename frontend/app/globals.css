@@ -2,11 +2,9 @@
 @import "tailwindcss";
 
 @theme {
-  /* This replaces the theme section of tailwind.config.ts */
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui;
-  
+  --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui;
   --animate-blob: blob 7s infinite;
-  
+
   @keyframes blob {
     0% { transform: translate(0px, 0px) scale(1); }
     33% { transform: translate(30px, -50px) scale(1.1); }
@@ -16,7 +14,18 @@
 }
 
 :root {
-  background: white;
+  background: #f8fafc;
+  color: #0f172a;
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background: #f8fafc;
   color: #0f172a;
 }
 

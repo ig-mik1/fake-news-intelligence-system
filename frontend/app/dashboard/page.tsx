@@ -1,8 +1,8 @@
 "use client";
 
-import type { ValueType, NameType } from "recharts/types/component/DefaultTooltipContent";
+import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ShieldCheck, Sigma } from "lucide-react";
+import { AlertTriangle, BarChart3, CheckCircle2, PieChart as PieChartIcon, ShieldCheck, Sigma } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -17,7 +17,25 @@ import {
 } from "recharts";
 
 import CommandCard from "@/components/command-card";
+import {
+  Badge,
+  ChartContainer,
+  ChartSkeleton,
+  EmptyState,
+  MetricCardSkeleton,
+  Notice,
+  PageShell,
+  SectionHeader,
+} from "@/components/ui";
 import { getDashboardSummary, type DashboardSummaryResponse } from "@/lib/api";
+
+const CHART_TOOLTIP_STYLE = {
+  borderRadius: "16px",
+  border: "1px solid #e2e8f0",
+  backgroundColor: "rgba(255, 255, 255, 0.96)",
+  boxShadow: "0 10px 30px rgba(15, 23, 42, 0.08)",
+  padding: "10px 12px",
+};
 
 function toRiskColor(value: number): string {
   if (value >= 75) return "#dc2626";
@@ -62,11 +80,12 @@ export default function DashboardPage() {
   }, [summary]);
 
   const distributionData = useMemo(
-    () => [
-      { name: "Real", value: totals.real, fill: "#16a34a" },
-      { name: "Fake", value: totals.fake, fill: "#dc2626" },
-      { name: "Unknown", value: totals.unknown, fill: "#64748b" },
-    ].filter((d) => d.value > 0),
+    () =>
+      [
+        { name: "Real", value: totals.real, fill: "#16a34a" },
+        { name: "Fake", value: totals.fake, fill: "#dc2626" },
+        { name: "Unknown", value: totals.unknown, fill: "#64748b" },
+      ].filter((item) => item.value > 0),
     [totals]
   );
 
@@ -95,16 +114,36 @@ export default function DashboardPage() {
   }, [summary, totals]);
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-6 pb-10">
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Big Data Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-500">Multi-weighted intelligence metrics from ChromaDB and model outputs.</p>
-        </div>
-      </div>
+    <PageShell>
+      <SectionHeader
+        title="Big Data Dashboard"
+        description="Multi-weighted intelligence metrics from ChromaDB and model outputs, presented with a cleaner analytics hierarchy."
+        action={
+          <Badge>
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            Sample size {summary?.sample_size ?? 60}
+          </Badge>
+        }
+      />
 
-      {loading ? <p className="text-sm text-slate-500">Loading metrics...</p> : null}
-      {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+      {loading ? (
+        <>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <MetricCardSkeleton key={index} />
+            ))}
+          </div>
+          <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <ChartContainer title="Trust Distribution" description="Loading chart..." contentClassName="h-72 sm:h-80">
+              <ChartSkeleton />
+            </ChartContainer>
+            <ChartContainer title="Risk Heatmap By Source" description="Loading chart..." contentClassName="h-72 sm:h-80">
+              <ChartSkeleton />
+            </ChartContainer>
+          </div>
+        </>
+      ) : null}
+      {error ? <Notice tone="danger">{error}</Notice> : null}
 
       {!loading && !error && summary ? (
         <>
@@ -116,46 +155,79 @@ export default function DashboardPage() {
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <section className="rounded-3xl border border-white/40 bg-white/60 p-6 shadow-lg backdrop-blur-xl">
-              <h2 className="mb-4 text-lg font-semibold text-slate-900">Trust Distribution</h2>
-              <div className="h-72">
+            <ChartContainer
+              title="Trust Distribution"
+              description="Classification mix across the latest dashboard sample."
+              action={summary.estimated_from_sample ? <Badge>Estimated sample</Badge> : <Badge>Live summary</Badge>}
+              contentClassName="h-72 sm:h-80"
+            >
+              <div className="h-full">
                 {distributionData.length ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
-                      <Pie data={distributionData} dataKey="value" nameKey="name" outerRadius={104} label />
-                      <Tooltip />
+                      <Pie
+                        data={distributionData}
+                        dataKey="value"
+                        nameKey="name"
+                        innerRadius={68}
+                        outerRadius={104}
+                        paddingAngle={3}
+                        stroke="#f8fafc"
+                        strokeWidth={4}
+                        isAnimationActive
+                        animationDuration={500}
+                        labelLine={false}
+                        label={({ name, percent }) => `${name} ${Math.round((percent ?? 0) * 100)}%`}
+                      />
+                      <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(value?: ValueType) => [`${value ?? 0}`, "Articles"]} />
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
-                  <p className="text-sm text-slate-500">No distribution data available.</p>
+                  <EmptyState
+                    icon={PieChartIcon}
+                    title="No data available yet"
+                    description="Distribution will appear once verified articles are available."
+                  />
                 )}
               </div>
-            </section>
+            </ChartContainer>
 
-            <section className="rounded-3xl border border-white/40 bg-white/60 p-6 shadow-lg backdrop-blur-xl">
-              <h2 className="mb-4 text-lg font-semibold text-slate-900">Risk Heatmap By Source</h2>
-              <div className="h-72">
+            <ChartContainer
+              title="Risk Heatmap By Source"
+              description="The riskiest active sources based on volume, fake rate, and unknown classifications."
+              contentClassName="h-72 sm:h-80"
+            >
+              <div className="h-full">
                 {heatmapData.length ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={heatmapData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="sourceLabel" interval={0} />
-                      <YAxis domain={[0, 100]} />
-                    <Tooltip
-                      labelFormatter={(_, payload) => {
-                        const row = payload?.[0]?.payload as
-                          | { source?: string; sourceLabel?: string }
-                          | undefined;
+                    <BarChart data={heatmapData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                      <CartesianGrid vertical={false} stroke="#e2e8f0" strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="sourceLabel"
+                        interval={0}
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "#64748b", fontSize: 12 }}
+                      />
+                      <YAxis
+                        domain={[0, 100]}
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "#64748b", fontSize: 12 }}
+                      />
+                      <Tooltip
+                        contentStyle={CHART_TOOLTIP_STYLE}
+                        labelFormatter={(_, payload) => {
+                          const row = payload?.[0]?.payload as
+                            | { source?: string; sourceLabel?: string }
+                            | undefined;
 
-                        if (!row) return "";
-                        return `${row.sourceLabel}: ${row.source}`;
-                      }}
-                      formatter={(value?: ValueType, name?: NameType) => [
-                        `${value ?? 0}%`,
-                        String(name ?? ""),
-                      ]}
-                    />
-                      <Bar dataKey="risk" radius={[8, 8, 0, 0]}>
+                          if (!row) return "";
+                          return `${row.sourceLabel}: ${row.source}`;
+                        }}
+                        formatter={(value?: ValueType, name?: NameType) => [`${value ?? 0}%`, String(name ?? "")]}
+                      />
+                      <Bar dataKey="risk" name="Risk score" radius={[10, 10, 0, 0]} barSize={34} animationDuration={500}>
                         {heatmapData.map((entry) => (
                           <Cell key={`${entry.source}-${entry.sourceLabel}`} fill={toRiskColor(entry.risk)} />
                         ))}
@@ -163,13 +235,17 @@ export default function DashboardPage() {
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <p className="text-sm text-slate-500">No source data available.</p>
+                  <EmptyState
+                    icon={BarChart3}
+                    title="No data available yet"
+                    description="Source risk scores will render after the dashboard receives source distribution data."
+                  />
                 )}
               </div>
-            </section>
+            </ChartContainer>
           </div>
         </>
       ) : null}
-    </div>
+    </PageShell>
   );
 }

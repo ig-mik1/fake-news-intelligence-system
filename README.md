@@ -369,4 +369,8 @@ python ingestion/run_ingestion_layer.py
 
 ## License
 
-Add your preferred license information here if this project will be distributed.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+**Copyright (c) 2026** Mohd Irfan Khan, Syed Fardeen, Mohammed Omer Ali
+
+Department of Computer Science, Lords Institute of Engineering and Technology, Hyderabad, India

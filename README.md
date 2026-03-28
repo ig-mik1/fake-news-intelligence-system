@@ -30,6 +30,23 @@ The project is structured as a FastAPI backend plus a Next.js frontend. It suppo
    - monitoring stream
    - human feedback submission
 
+## End-to-End Flow (How the App Works)
+
+This is the runtime flow a reader should understand first:
+
+1. Data ingestion runs (startup + every hour) and pulls articles/posts from RSS, NewsData, and Reddit/PullPush.
+2. Ingestion writes normalized text and metadata into ChromaDB in `data/vector_storage/`.
+3. A user opens the frontend and submits a claim/headline through the Verify page.
+4. The frontend calls `POST /api/verify` on FastAPI.
+5. The backend pipeline does three things:
+  - model inference for fake/real probability
+  - evidence retrieval + evidence agreement scoring
+  - source trust scoring
+6. The hybrid verifier combines those signals into a final trust score and `REAL` or `FAKE` label.
+7. The frontend displays the result with evidence summary, confidence, and trust breakdown.
+8. Optional user feedback is posted to `POST /api/feedback` for later review.
+9. Dashboard and Monitoring pages query summary/live endpoints for operations visibility.
+
 ## Tech Stack
 
 ### Backend
@@ -57,17 +74,72 @@ The project is structured as a FastAPI backend plus a Next.js frontend. It suppo
 ## Repository Structure
 
 ```text
-api/                 FastAPI application and request schemas
-frontend/            Next.js dashboard application
-ingestion/           RSS, NewsData, and Reddit ingestion scripts
-verification/        Hybrid verifier, evidence engine, prediction service
-pipeline/            Data preparation utilities
-models/              Trained model artifacts
-data/                Vector storage and feedback data
-logs/                Verification event logs
-Dockerfile           Backend container image
-docker-compose.yml   Full-stack local container orchestration
+api/                         FastAPI app entrypoint and API schemas
+  app.py                     Main backend application and routes
+  schemas.py                 Request/response models
+
+frontend/                    Next.js web app
+  app/                       Route pages (home, verify, dashboard, monitoring)
+  components/                Reusable UI components
+  lib/api.ts                 Frontend API client wrapper
+
+ingestion/                   External news/evidence collectors
+  run_ingestion_layer.py     Orchestrates full ingestion run
+  rss_ingestion.py           RSS fetch
+  newsdata_ingestion.py      NewsData API fetch
+  reddit_ingestion.py        Reddit/PullPush fetch
+
+verification/                Verification and scoring engine
+  prediction_service.py      Model inference layer
+  evidence_engine.py         Retrieval and evidence processing
+  hybrid_verifier.py         Final trust score and decision logic
+
+pipeline/                    Offline data preparation utilities
+models/                      Local model artifacts (ignored in Git)
+data/                        Runtime data, vector store, feedback (ignored in Git)
+logs/                        Runtime logs (ignored in Git)
+
+Dockerfile                   Backend container image
+frontend/Dockerfile          Frontend container image
+docker-compose.yml           Local full-stack orchestration
 ```
+
+## Build Process (How This Application Was Built)
+
+The system was developed in layers so each part can be tested independently:
+
+1. Backend foundation
+  - Built FastAPI service, request schemas, health checks, and core endpoints.
+  - Added scheduler to run ingestion in background.
+
+2. Data ingestion layer
+  - Implemented source connectors (RSS, NewsData, Reddit/PullPush).
+  - Added normalization, deduplication, and vector-store upsert workflow.
+
+3. Verification engine
+  - Added transformer inference service for fake/real prediction.
+  - Added evidence retrieval and source credibility logic.
+  - Implemented hybrid trust scoring to combine all signals.
+
+4. Frontend application
+  - Built Verify, Dashboard, and Monitoring pages in Next.js.
+  - Added API client integration and UI components for result display.
+
+5. Operations and deployment
+  - Added Dockerfiles and Compose setup for local full-stack run.
+  - Added feedback capture and verification logging for iterative improvement.
+
+## What Is Intentionally Not Committed
+
+To keep the repository lightweight and safe, these are intentionally ignored:
+
+- `data/` runtime datasets and ChromaDB files
+- `models/` model checkpoints and weights
+- `fnis/` local virtual environment
+- `logs/*.jsonl` generated runtime logs
+- `FNIS_Paper.tex` report/paper source
+
+After cloning, provide your own model artifacts and run ingestion locally to populate vector data.
 
 ## Core Services
 
